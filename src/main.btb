@@ -1,0 +1,5 @@
+#import "Logger"
+
+fn main() {
+    log("Hello")
+}
