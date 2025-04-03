@@ -1,5 +1,8 @@
 #import "Logger"
 
+
+#import "./core.btb"
+
 fn main() {
-    log("Hello")
+    StartGame()
 }

@@ -1,6 +1,7 @@
 # Get started
 **Requirements**
-- Download [BTB](https://github.com/Emarioo/BetterThanBatch) from its releases (or clone and build compiler)
+- Download [BTB](https://github.com/Emarioo/BetterThanBatch) from its releases (or clone and build compiler).
+  Put `btb.exe` in your PATH environment variable.
 - Download Visual Studio or GCC (MinGW if on Windows)
 
 **Pre-built**

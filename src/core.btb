@@ -1,0 +1,78 @@
+
+#import "Graphics"
+#import "Logger"
+#import "String"
+#import "Memory"
+#import "BucketArray"
+#import "Math"
+
+#import "./render.btb"
+
+struct Entity {
+    id: i32; // index into bucket array
+    pos: vec3;
+    // TODO: Add UUID?
+}
+
+struct GameState {
+    window_width: i32;
+    window_height: i32;
+    window: WindowContext*;
+
+    renderer: Renderer;
+
+    entities: BucketArray<Entity>;
+
+    player_entity: Entity*;
+
+    camera_position: vec3;
+    camera_rotation: vec3;
+}
+
+global game_state: GameState*
+
+fn StartGame() {
+    game_state = Allocate(sizeof(GameState))
+    construct(game_state)
+    state := game_state // for debugging, globals don't show up in debugger
+
+    game_state.window_width = 800
+    game_state.window_height = 600
+    game_state.window = CreateWindow(game_state.window_width, game_state.window_height, "Wander")
+
+    game_state.renderer.setup("assets")
+
+    game_state.entities.init(512)
+    player_entity_index: i32
+    player_entity, ind := game_state.entities.add(null)
+    game_state.player_entity = player_entity
+    player_entity.id = player_entity_index
+
+    game_state.camera_position.z = 3
+
+    GameLoop()
+}
+
+fn GameLoop() {
+    state := game_state // for debugging, globals don't show up in debugger
+
+    x := 0
+
+    while game_state.window.running {
+        FillColor(game_state.window, {0.1,0.1,0.1})
+
+        UpdateGame(game_state)
+
+        game_state.renderer.render(game_state)
+
+        DrawText(game_state.window, x, x, 20, "Cold as ice")
+
+        x += 1
+
+        RefreshWindow(game_state.window)
+    }
+}
+
+fn UpdateGame(state: GameState*) {
+
+}
