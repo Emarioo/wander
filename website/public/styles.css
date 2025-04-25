@@ -1,0 +1,109 @@
+/* Reset some default styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  
+  body {
+    font-family: Arial, sans-serif;
+    /* background-color: #f4f4f4; */
+    background-color: #233a2f;
+    color: #333;
+    /* display: flex;
+    justify-content: center;
+    align-items: center; */
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  
+  .container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    text-align: center;
+}
+  
+  h1 {
+    font-size: 2.5rem;
+    color: #7bfeff;
+  }
+  
+  p {
+    font-size: 1.2rem;
+    color: #5bc7be;
+    /* color: #8d857f; */
+    margin-top: 10px;
+  }
+
+  .strong-suggest {
+    color:white;
+    font-weight: bold;
+  }
+  
+  .front-image {
+    max-width: 100%;
+    height: auto;
+  }
+  
+  .download-section {
+    margin-top: 30px;
+  }
+  
+  .download-btn {
+    display: inline-block;
+    padding: 15px 30px;
+    background-color: #851521;
+    /* color: white; */
+    color: #dfdfdf;
+    font-weight: bold;
+    text-decoration: none;
+    border-radius: 5px;
+    font-size: 1.1rem;
+    transition: background-color 0.3s;
+  }
+  
+  .download-btn:hover {
+    background-color: #2980b9;
+    transform: scale(1.05);
+  }
+
+  .tooltip {
+    visibility: hidden;
+    background-color: #333;
+    color: #fff;
+    text-align: center;
+    border-radius: 5px;
+    padding: 8px;
+    position: absolute;
+    bottom: 110%; /* Positioning above the button */
+    left: 50%;
+    margin-left: -60px;
+    width: auto;
+    font-size: 0.9rem;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  
+  .download-btn:hover .tooltip {
+    visibility: visible;
+    opacity: 1;
+  }
+  a {
+    color:#237bb5;
+  }
+
+  .note {
+    margin-top: 15px;
+    font-size: 1rem;
+    color: #766f64;
+  }
+  
+  footer {
+    margin-top: 40px;
+    font-size: 0.9rem;
+    color: #7f8c8d;
+  }
+  

@@ -1,0 +1,11 @@
+/*
+    The installer user program.
+*/
+
+#import "Logger"
+
+global VERSION = "0.0.1"
+
+fn main() {
+    log("Installer")
+}

@@ -1,3 +1,8 @@
+# Wander
+Some game with cool installer?
+
+![](website/public/chatgpt_fantasy_town.png)
+
 # Get started
 **Requirements**
 - Download [BTB](https://github.com/Emarioo/BetterThanBatch) from its releases (or clone and build compiler).

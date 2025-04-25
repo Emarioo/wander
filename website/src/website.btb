@@ -1,0 +1,127 @@
+
+#import "Net"
+#import "Logger"
+#import "OS"
+#import "Threads"
+#import "HTTP"
+#import "Math"
+
+fn main() {
+    start_webserver()
+}
+
+struct Session {
+    server: HTTPServer*;
+}
+
+global session: Session
+
+fn start_webserver() {
+    port: i32 = 80
+    // port: i32 = 2000 + (random_f32() * 1000)
+    
+    #if OS_LINUX
+        err := signal(SIGINT, app_shutdown)
+        if err < 0 {
+            log("signal() failed")
+        }
+        fn @oscall app_shutdown(signum: i32) {
+            log("shutdown")
+            session.server.close()
+        }
+    #endif
+    
+    construct(&session)
+    
+    session.server = StartHTTPServer(port, handle_event, &session)
+    if session.server {
+        log("Started server at port ",port)
+        session.server.wait()
+    }
+}
+
+fn handle_event(request: HTTPRequest*, e: NetEvent*, user_data: void*) {
+    session := cast<Session*>user_data
+    server := session.server
+    
+    path := request.route
+    content := request.content
+    
+    // log(request)
+    
+    if !IsPathSanitized(path) {
+        log("path is not safe: ", path)
+        return;
+    }
+    
+    //###############
+    //   ROUTING
+    //###############
+    real_path: StringBuilder
+    defer real_path.cleanup()
+    // TODO: path would be just public but we run server from root path of repo, not from within website directory.
+    real_path.append("website/public")
+    if(path[0] == '/') {
+        if path == "/" {
+            real_path.append("/index.html")
+        } else {
+            real_path.append(path)
+        }
+    } else {
+        // log("sus")
+        server.send(404, {}, e.who)
+        return; // suspicious, path in header always begins with slash
+    }
+
+    // nocheckin IMPORTANT: 16-byte alignment BUG, if we add even (or odd?) number of local variables bug will go away.
+    filesize: i64
+    file := FileOpen(real_path, FILE_READ_ONLY, &filesize)
+    if !file {
+        log("bad file ", real_path)
+        server.send(404, {}, e.who)
+        // log("send: Not Found")
+    } else {
+        defer FileClose(file)
+        
+        response: StringBuilder
+        defer response.cleanup()
+    
+        response.reserve(300 + filesize)
+        
+        server.build_response(&response, 200, filesize)
+        
+        header_len := response.size()
+        response.resize(header_len + filesize)
+        
+        err := FileRead(file, response.ptr + header_len, filesize)
+        if !err {
+            log("FileRead failed on ", real_path)
+            server.send(404, {}, e.who)
+            return;
+        }
+        
+        server.send_built_response(&response, e.who)
+        log("sent: ",real_path)
+    }
+}
+
+fn IsPathSanitized(path: char[]) -> bool {
+    // Crude sanitization
+    if !path.ptr || path.ptr[0] != '/'
+       return false
+    for 1..path.len {
+        chr := path[nr]
+        if path.ptr[nr-1] == '.' && chr == '.'
+            return false
+        if chr >= '0' && chr <= '9'
+            continue
+        if chr >= 'A' && chr <= 'Z'
+            continue
+        if chr >= 'a' && chr <= 'z'
+            continue
+        if chr == '_' || chr == '-' || chr == '-' || chr == '.' || chr == '/'
+            continue
+        return false
+    }
+    return true
+}
