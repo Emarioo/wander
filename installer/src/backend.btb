@@ -1,3 +1,144 @@
 /*
     The backend server for the installer.
 */
+
+/*
+    The installer user program.
+    (also for develop)
+*/
+
+#import "Logger"
+#import "OS"
+#import "Net"
+#import "Stream"
+
+#import "./util.btb"
+
+#macro VERSION "0.0.1"
+#macro COMMIT_HASH ""
+#macro SERVER_PORT 9723
+
+fn print_version() {
+    log("Wander Content Server v",VERSION)
+    if COMMIT_HASH.len != 0 {
+        log("commit hash: ",COMMIT_HASH)
+    }
+}
+
+
+struct Session {
+    server: Server;
+    root_dir: StringBuilder;
+    // net_lock: Semaphore; // this lock allows us to ask server for data and block until the callback is called then continue executing
+
+    // fn init() {
+    //     net_lock.init(1, 1)
+    // }
+}
+global session: Session*;
+
+fn main(argc: i32, argv: char**) -> i32 {
+    print_version()
+
+    if argc == 1 {
+
+    } else {
+
+    }
+
+    session = Allocate(sizeof(Session))
+    construct(session)
+
+    // session.root_dir.append(".")
+    // Directory during development
+    session.root_dir.append("sandbox/server")
+
+    session.server.set_callback(handle_event, null)
+    res := session.server.start(SERVER_PORT, protocol = NET_TCP | NET_PROTO_MESSAGE)
+
+    if res != NET_SUCCESS {
+        log("Coulld not start server on port ", SERVER_PORT)
+        return 1
+    }
+
+    log("Started server on port ", SERVER_PORT)
+
+    session.server.wait()
+
+    return 0
+}
+
+fn handle_event(e: NetEvent*, user_data: void*) {
+    if e.type != EVENT_RECEIVE
+        return;
+
+    // log(e)
+
+    stream: ByteStream
+    defer stream.cleanup()
+    stream.write(e.bytes.ptr, e.bytes.len)
+
+    head := 0
+    kind: MessageType
+    stream.read<i32>(&head, cast<i32*>&kind)
+
+    // TODO: Check errors from read and writes
+    switch kind {
+        case MSG_LATEST_VERSION:
+            msg: ByteStream
+            defer msg.cleanup()
+            msg.write<i32>(MSG_RESPONSE_LATEST_VERSION)
+            msg.write_string8("wander-0.1.0")
+            data: u8[]
+            msg.finalize(&data)
+
+            session.server.send(data, who = e.who)
+        
+        case MSG_GET_FILE:
+            version, relative_file: StringBuilder
+            defer { version.cleanup() relative_file.cleanup() }
+
+            stream.read_string8(&head, &version)
+            stream.read_string8(&head, &relative_file)
+            
+            // PREPARE RESPONSE
+            new_kind := MSG_RESPONSE_GET_FILE
+            stream.write_at(0, &new_kind, sizeof(i32))
+
+            path: StringBuilder
+            path.append(session.root_dir)
+            path.append("/")
+            path.append(version)
+            path.append("/")
+            path.append(relative_file)
+            
+            file_size: i64
+            file := FileOpen(path, FILE_READ_ONLY, &file_size)
+            if !file {
+                log("Could not read ", path)
+
+                // Send back empty data, installer knows that this means failure
+                stream.write<i32>(0)
+                data: u8[]
+                stream.finalize(&data)
+                session.server.send(data, who = e.who)
+                return
+            }
+
+            log("File request: ", version, " ", relative_file, " size: ", file_size)
+
+            valid_size := file_size < 0x7FFF_FFFF
+            Assert(valid_size)
+            stream.write<i32>(file_size)
+
+            file_data := stream.write_late(file_size)
+            FileRead(file, file_data, file_size)
+            FileClose(file)
+
+            data: u8[]
+            stream.finalize(&data)
+
+            session.server.send(data, who = e.who)
+        case: // dd nothing
+    }
+}

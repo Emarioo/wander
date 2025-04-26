@@ -1,11 +1,309 @@
 /*
     The installer user program.
+    (also for develop)
 */
 
 #import "Logger"
+#import "OS"
+#import "Net"
+#import "Stream"
 
-global VERSION = "0.0.1"
+#import "./util.btb"
 
-fn main() {
-    log("Installer")
+#macro VERSION "0.0.1"
+#macro COMMIT_HASH ""
+#macro SERVER_PORT 9723
+
+fn print_version() {
+    log("Wander Installer v",VERSION)
+    if COMMIT_HASH.len != 0 {
+        log("commit hash: ",COMMIT_HASH)
+    }
+}
+
+struct Session {
+    client: Client;
+    net_lock: Semaphore; // this lock allows us to ask server for data and block until the callback is called then continue executing
+
+    last_version: StringBuilder;
+
+    bad_file: bool;
+
+    // get_file_version: StringBuilder;
+    // get_file_file: StringBuilder;
+    get_file_data: char[];
+
+    fn init() {
+        net_lock.init(0, 1)
+    }
+}
+global session: Session*;
+
+fn main(argc: i32, argv: char**) -> i32 {
+    /*
+        First user experience
+            - Download installer
+            - Run installer (no flags)
+                - It opens a terminal (for now)
+                - 
+    */
+    /*
+        Features
+            Download game
+                A game version has game files, manifest, signature.
+                An installed game has static game version and permanent data.
+                Permanent data is: user settings, world data
+    */
+
+    print_version()
+
+    if argc == 1 {
+
+    } else {
+
+    }
+
+    session = Allocate(sizeof(Session))
+    construct(session)
+
+    server_address: StringBuilder
+    server_address.append("localhost")
+    // server_address.append("btb-lang.org")
+
+    session.client.set_callback(handle_event, null)
+    res := session.client.start(server_address, SERVER_PORT, protocol = NET_TCP | NET_PROTO_MESSAGE)
+    if res != NET_SUCCESS {
+        log("Could not start server ", server_address, ":",SERVER_PORT)
+        return 1
+    }
+
+    log("Retrieving latest version...")
+    latest_version := RetrieveLatestGameVersion()
+
+    log("Latest version: ", latest_version)
+
+
+    // Ask user, do you want to install?
+    log("Do you want to install ", latest_version,"?")
+    log("Yes")
+
+    log() // extra spacing to separate downloading output
+
+    // No flags -> install latest game version
+    // Ask server for latest version
+
+    DownloadGameVersion(latest_version)
+
+    // i := 0
+    // while i < 16 {
+    //     log(" File ", i,"/15")
+    //     i++
+    //     ProcessSleep(0.7)
+    // }
+
+    return 0
+}
+
+// Blocking
+fn RetrieveLatestGameVersion() -> StringBuilder {
+    msg: ByteStream
+    defer msg.cleanup()
+    msg.write<i32>(MSG_LATEST_VERSION)
+
+    data: u8[];
+    msg.finalize(&data)
+
+    session.client.send(data)
+
+    session.net_lock.wait()
+
+    return session.last_version
+}
+
+fn DownloadGameVersion(version: char[]) {
+    // TODO: Retrieve signature and verify
+
+    #macro INSTALLER_DIR "sandbox/installer"
+
+    path: StringBuilder
+    defer path.cleanup()
+    path.append(INSTALLER_DIR)
+    path.append("/")
+    path.append(version)
+    path.append("/manifest.txt")
+
+    log("Downloading manifest.txt")
+    res := DownloadFile(version, "manifest.txt", path)
+    if !res {
+        return
+    }
+
+    manifest_hash: char[];
+
+    #if OS_WINDOWS
+    cmd: StringBuilder
+    cmd.append("certutil -hashfile ")
+    cmd.append(path)
+    cmd.append(" sha256")
+    text: StringBuilder
+    exit_code: i32;
+    res = ExecuteCommandWithOutput(cmd, &text, &exit_code)
+    cmd.cleanup()
+    if !res {
+        log("ExecuteCommandWithOutput failed")
+        return
+    }
+    if exit_code != 0 {
+        log(text)
+        return
+    }
+
+    head := 0
+    parse_line(&head, text) // SHA256 hash of <file>:
+    parse_space(&head, text)
+    manifest_hash = parse_non_space(&head, text) // now we parse the hash
+
+    // filter output from certutil
+    log("HASH: ", manifest_hash)
+
+    #else
+    Assert(false)
+    // ExecuteCommand("sha256sum")
+    #endif
+
+
+    // path: StringBuilder
+    // path.append("sandbox/installer/")
+    // path.append(version)
+    // path.append("/signature.hash")
+    // DownloadFile(version, "signature.hash", path)
+    // Replace carriage return
+    for @ptr c : session.get_file_data
+        if *c == '\r';
+            *c = ' '
+
+    struct ManifestFile {
+        file: StringBuilder;
+        hash: StringBuilder;
+    }
+    files: Array<ManifestFile>
+    defer files.cleanup()
+
+    lines := split("\n", session.get_file_data)
+    defer lines.cleanup()
+    for lines {
+        head := 0
+        parse_space(&head, *it)
+        path := parse_non_space(&head, *it)
+        parse_space(&head, *it)
+        hash := parse_non_space(&head, *it)
+
+        log(" ", nr, " ", path, " -> ", hash)
+        f: ManifestFile
+        f.file.append(path)
+        f.hash.append(hash)
+        files.add(f)
+    }
+    
+    bad_file_count := 0
+
+    for mf : files {
+        path.clear()
+        path.append(INSTALLER_DIR)
+        path.append("/")
+        path.append(version)
+        path.append("/")
+        path.append(mf.file)
+        log("Downloading ", mf.file)
+        res := DownloadFile(version, mf.file, path)
+        if !res
+            bad_file_count++
+    }
+    
+    if bad_file_count > 0 {
+        log("Manifest file is corrupt. Content server is missing ", bad_file_count, " file(s).")
+    }
+}
+
+fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
+    msg: ByteStream
+    defer msg.cleanup()
+    msg.write<i32>(MSG_GET_FILE)
+    msg.write_string8(version)
+    msg.write_string8(file)
+
+    data: u8[];
+    msg.finalize(&data)
+
+    session.client.send(data)
+
+    session.net_lock.wait()
+
+    if session.bad_file {
+        session.bad_file = false
+        return false
+    }
+
+    at := find("/", out_path, true)
+    dir := substring(out_path, 0, at)
+    DirectoryCreate(dir)
+
+    f := FileOpen(out_path, FILE_CLEAR_AND_WRITE)
+    if !f {
+        log("Could not write to ", out_path)
+    }
+    defer FileClose(f)
+
+    FileWrite(f, session.get_file_data.ptr, session.get_file_data.len)
+
+    return true
+}
+
+fn handle_event(e: NetEvent*, user_data: void*) {
+    if e.type != EVENT_RECEIVE
+        return;
+
+    // log(e)
+
+    stream: ByteStream
+    defer stream.cleanup()
+    stream.write(e.bytes.ptr, e.bytes.len)
+
+    head := 0
+    kind: MessageType
+    stream.read<i32>(&head, cast<i32*>&kind)
+
+    switch kind {
+        case MSG_RESPONSE_LATEST_VERSION:
+            stream.read_string8(&head, &session.last_version)
+            session.net_lock.signal()
+        case MSG_RESPONSE_GET_FILE:
+            version, relative_file: StringBuilder
+            defer { version.cleanup() relative_file.cleanup() }
+
+            stream.read_string8(&head, &version)
+            stream.read_string8(&head, &relative_file)
+            file_size: i32;
+            stream.read(&head, &file_size)
+
+            // log("File recieved: ", version, " ", relative_file, " size: ", file_size)
+
+            if file_size == 0 {
+                session.bad_file = true
+                log(" server is missing ", relative_file)
+                session.net_lock.signal()
+                return
+            }
+
+            new_ptr := Reallocate(file_size, session.get_file_data.ptr, session.get_file_data.len)
+            Assert(new_ptr)
+
+            session.get_file_data.ptr = new_ptr
+            session.get_file_data.len = file_size;
+            
+            stream.read(&head, session.get_file_data.ptr, file_size)
+
+            session.net_lock.signal()
+        case: // dd nothing
+    }
 }
