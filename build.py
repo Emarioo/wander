@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import os, sys, hashlib
+import os, sys, hashlib, shutil, datetime
 
 MODE_COMPILE_GAME = 1
 MODE_RUN_WEBSITE = 2
@@ -35,7 +35,7 @@ def main():
 
     if mode == MODE_COMPILE_GAME:
         compile_game()
-        os.system("bin/core.exe")
+        os.system("bin\\core.exe")
     elif mode == MODE_RUN_WEBSITE:
         res = os.system("btb website/src/website.btb -o bin/website.exe")
         if res == 0:
@@ -53,7 +53,21 @@ def main():
 
         create_manifest("bin/manifest.txt")
 
-        os.system(f"bin\\installer.exe upload {version}")
+        sign_manifest("bin/manifest.txt", "bin/manifest.sig")
+
+        temp_dir = "sandbox/server/wander-0.1.0"
+        shutil.copy("bin/manifest.txt", f"{temp_dir}/manifest.txt")
+        shutil.copy("bin/manifest.sig", f"{temp_dir}/manifest.sig")
+        shutil.copy("bin/core.exe", f"{temp_dir}/core.exe")
+
+        for folder, _, files in os.walk("assets"):
+            for filename in files:
+                file_path = os.path.join(folder, filename)
+                dst = f"{temp_dir}/{file_path}"
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy(file_path, dst)
+
+        # os.system(f"bin\\installer.exe upload {version}")
     else: 
         assert False
 
@@ -71,24 +85,35 @@ def create_manifest(output_path):
     text = ""
     
     def add_file(entry_path, path):
+        entry_path = entry_path.replace("\\","/")
         sha256 = hashlib.sha256()
         with open(path, 'rb') as f:
             while chunk := f.read(8192):
                 sha256.update(chunk)
 
-        text.append(f"{entry_path} {sha256.hexdigest()}\n")
+        return f"{entry_path} {sha256.hexdigest()}\n"
 
-    add_file("core.exe", "bin/core.exe")
-    add_file("game.dll", "bin/game.dll")
+    now = datetime.datetime.now()
+    text += f"version dev_0.1.0\n"
+    text += f"date    {now.year}-{now.month:02}-{now.day:02}\n"
+    text += "\n"
+
+    text += add_file("core.exe", "bin/core.exe")
+    # text += add_file("game.dll", "bin/game.dll")
 
     for folder, _, files in os.walk("assets"):
         for filename in files:
             file_path = os.path.join(folder, filename)
-            print(file_path)
-            add_file(file_path, file_path)
+            text += add_file(file_path, file_path)
     
     with open(output_path, 'w', encoding='utf-8') as manifest:
         manifest.write(text)
+
+def sign_manifest(manifest, out_path):
+    private_key_path = "private_key.pem"
+    res = os.system(f"openssl dgst -sha256 -sign {private_key_path} -out {out_path} {manifest}")
+    if res != 0:
+        exit(1)
 
 if __name__ == "__main__":
     main()

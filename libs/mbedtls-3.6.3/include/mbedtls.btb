@@ -1,0 +1,49 @@
+// TODO: Don't hardcode library path
+#load "libs/mbedtls-3.6.3/lib-mingw/libmbedcrypto.a" as mbedcrypto
+#load "Bcrypt.lib"
+
+//####################
+//     Constants
+//####################
+#macro MBEDTLS_ERR_RSA_VERIFY_FAILED -0x4380
+
+//####################
+//       Types
+//####################
+
+#macro mbedtls_pk_info_t void
+struct mbedtls_pk_context {
+    private_pk_info: mbedtls_pk_info_t*; /* Public key information         */
+    private_pk_ctx: void*;               /* Underlying public key context  */
+    // NOTE: Depending on what defines mbedtls was compiled with there may
+    // be more fields.
+}
+
+enum mbedtls_md_type_t {
+    MBEDTLS_MD_NONE      = 0x00, /* None.                          */
+    MBEDTLS_MD_MD5       = 0x03, /* The MD5 message digest.        */
+    MBEDTLS_MD_RIPEMD160 = 0x04, /* The RIPEMD-160 message digest. */
+    MBEDTLS_MD_SHA1      = 0x05, /* The SHA-1 message digest.      */
+    MBEDTLS_MD_SHA224    = 0x08, /* The SHA-224 message digest.    */
+    MBEDTLS_MD_SHA256    = 0x09, /* The SHA-256 message digest.    */
+    MBEDTLS_MD_SHA384    = 0x0a, /* The SHA-384 message digest.    */
+    MBEDTLS_MD_SHA512    = 0x0b, /* The SHA-512 message digest.    */
+    MBEDTLS_MD_SHA3_224  = 0x10, /* The SHA3-224 message digest.   */
+    MBEDTLS_MD_SHA3_256  = 0x11, /* The SHA3-256 message digest.   */
+    MBEDTLS_MD_SHA3_384  = 0x12, /* The SHA3-384 message digest.   */
+    MBEDTLS_MD_SHA3_512  = 0x13, /* The SHA3-512 message digest.   */
+}
+
+//####################
+//    Functions
+//####################
+
+fn @import(mbedcrypto) mbedtls_sha256(input: u8*, ilen: i64, output: u8*, is224: i32) -> i32;
+
+fn @import(mbedcrypto) mbedtls_pk_init(ctx: mbedtls_pk_context*) -> i32;
+
+// key = string data for public key (null terminated)
+// keylen = strlen(key) + 1 (includes null terminator)
+fn @import(mbedcrypto) mbedtls_pk_parse_public_key(ctx: mbedtls_pk_context*, key: u8*, keylen: i64) -> i32;
+
+fn @import(mbedcrypto) mbedtls_pk_verify(ctx: mbedtls_pk_context*, md_alg: mbedtls_md_type_t, hash: u8*, hash_len: i64, sig: u8* , sig_len: i64) -> i32;

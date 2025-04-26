@@ -54,3 +54,9 @@ sandbox
 /*.h
 /*.s
 /*.asm
+
+# Secrets
+*.pem
+!*/public_key.pem
+!*/test_private_key.pem
+*/dev.token
