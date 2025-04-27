@@ -60,3 +60,4 @@ sandbox
 !*/public_key.pem
 !*/test_private_key.pem
 */dev.token
+dev.token

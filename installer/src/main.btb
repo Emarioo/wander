@@ -27,9 +27,12 @@ struct Session {
     client: Client;
     net_lock: Semaphore; // this lock allows us to ask server for data and block until the callback is called then continue executing
 
-    last_version: StringBuilder;
+    install_dir: StringBuilder;
+
+    channels: Array<StringBuilder>;
 
     bad_file: bool;
+
 
     get_file_data: char[];
 
@@ -56,16 +59,35 @@ fn main(argc: i32, argv: char**) -> i32 {
     */
 
     disable_safety := false
+    verify_files := false
     run_game := false
     list_channels := false
+
+    install_dir: StringBuilder
+    {
+        // set install_dir to folder where installer.exe exists
+        // depending on how and where you call the installer the exe path
+        // may be absolute or relative if you start a new process installer in C code 
+        // in a certain then we might have problems if you don't provide that argument?
+        exe := Slice<char>{argv[0], strlen(argv[0])}
+        for 0..exe.len {
+            if exe[nr] == '\\'
+                exe[nr] = '/'
+        }
+        at := find("/", exe, true)
+        install_dir.append(substring(exe, 0, at))
+    }
     channel: StringBuilder;
+    channel.append("release")
+    
     upload := false;
     upload_version: StringBuilder;
     upload_dir: StringBuilder;
+
     server_address: StringBuilder;
     // server_address.append("btb-lang.org")
     server_address.append("localhost")
-
+    
     argi := 1
     while argi < argc {
         arg := Slice<char>{argv[argi], strlen(argv[argi])}
@@ -74,24 +96,28 @@ fn main(argc: i32, argv: char**) -> i32 {
             print_version()
             return 0
         } else if arg == "-h" || arg == "--help" {
-            log("The Wander Installer lets you securly download new versions.")
+            log("The Wander Installer lets you securely download new versions.")
             log("You can also download beta versions and auto-update them while playing the game (hotreloading).")
             log("")
             log("If you want secure downloads you MUST ")
             log("")
             log("Flags:")
-            log("  -v,--version        : Print version")
-            log("  --unsafe            : Ignore hash and signature checks (still warns)")
-            log("  --run               : Update and run game")
-            log("  --list-channels     : List available game versions")
-            log("  --channel <version> : Download a beta version or older game versions")
+            log("  -v,--version         : Print version")
+            log("  --unsafe             : Ignore hash and signature checks (still warns)")
+            log("  --verify             : Verify game files against the manifest and signature (does not download anything)")
+            log("  --run                : Update and run game")
+            log("  --list-channels      : List available game versions")
+            log("  --channel <name>     : Download a beta version or older game versions")
+            log("  --install-dir <path> : Folder where game versions are installed. The folder where installer is located is default.")
             log()
             log("Dev flags:")
-            log("  --upload <version> <game_files_dir> : Upload release or beta game version.\n       Requires 'dev.token' for authentication to content server.")
+            log("  --upload <channel> <game_files_dir> : Upload release or beta game version.\n       Requires 'dev.token' for authentication to content server.")
             log("  --ip <server_ip>[:port] : Connect to a different content server (btb-lang.org is default)")
             return 0
         } else if arg == "--unsafe" {
             disable_safety = true
+        } else if arg == "--verify" {
+            verify_files = true
         } else if arg == "--run" {
             run_game = true
         } else if arg == "--list-channels" {
@@ -103,6 +129,14 @@ fn main(argc: i32, argv: char**) -> i32 {
             }
             channel.clear()
             channel.append(argv[argi])
+            argi++
+        } else if arg == "--install-dir" {
+            if argi >= argc {
+                log("Missing argument after ", arg)
+                return 1
+            }
+            install_dir.clear()
+            install_dir.append(argv[argi])
             argi++
         } else if arg == "--ip" {
             if argi >= argc {
@@ -137,6 +171,12 @@ fn main(argc: i32, argv: char**) -> i32 {
     session = Allocate(sizeof(Session))
     construct(session)
 
+    // install_dir.clear()
+    // install_dir.append("sandbox/installer")
+
+    session.install_dir = install_dir
+    install_dir = {}
+
     // Separate server IP and port
     port := SERVER_PORT
     {
@@ -164,31 +204,74 @@ fn main(argc: i32, argv: char**) -> i32 {
         return 1
     }
 
-    log("Retrieving latest version...")
-    latest_version := RetrieveLatestGameVersion()
+    if verify_files {
+        VerifyLocalFiles(channel)
+    } else if list_channels {
+        array: Array<StringBuilder>
+        RetrieveChannels(&array);
+        log("Available channels:")
+        for array {
+            log(" ", *it)
+        }
+    } else if upload {
+        log("TODO: upload")
+    } else {
+        manifest := RetrieveManifest(channel)
+        if !manifest {
+            if channel == "release" {
+                log("This channel should always exist. Ask the developers, they may be experiencing technical difficulties.")
+            }
+            log("Try installer.exe --list-channels")
+            return 1
+        }
 
-    log("Latest version: ", latest_version)
+        if manifest.game_version.len == 0 {
+            log("Do you want to install unnamed version from channel ", channel, " in ", session.install_dir,"/",channel,"?")
+        } else {
+            log("Do you want to install ", manifest.game_version," in ", session.install_dir,"/",channel,"?")
+        }
+        log("Yes")
+        log() // extra spacing to separate downloading output
 
+        // We will download and parse manifest again.
+        // This is fine for now.
+        DownloadGameVersion(channel)
+    }
 
-    // Ask user, do you want to install?
-    log("Do you want to install ", latest_version,"?")
-    log("Yes")
-
-    log() // extra spacing to separate downloading output
-
-    // No flags -> install latest game version
-    // Ask server for latest version
-
-    DownloadGameVersion(latest_version)
+    if run_game {
+        log("TODO: run game, --run")
+    }
+    if unsafe {
+        log("TODO: unsafe, --unsafe, what should it do? not download files?")
+    }
 
     return 0
 }
 
-// Blocking
-fn RetrieveLatestGameVersion() -> StringBuilder {
+fn RetrieveChannels(channels: Array<StringBuilder>*) {
+    construct(channels)
+
     msg: ByteStream
     defer msg.cleanup()
-    msg.write<i32>(MSG_LATEST_VERSION)
+    msg.write<i32>(MSG_GET_CHANNELS)
+
+    data: u8[];
+    msg.finalize(&data)
+
+    session.client.send(data)
+
+    session.net_lock.wait();
+
+    *channels = session.channels
+    session.channels = {}
+}
+
+fn RetrieveManifest(channel: char[]) -> Manifest* {
+    msg: ByteStream
+    defer msg.cleanup()
+    msg.write<i32>(MSG_GET_FILE)
+    msg.write_string8(channel)
+    msg.write_string8("manifest.txt")
 
     data: u8[];
     msg.finalize(&data)
@@ -197,29 +280,105 @@ fn RetrieveLatestGameVersion() -> StringBuilder {
 
     session.net_lock.wait()
 
-    return session.last_version
+    if session.bad_file {
+        log("Could not download manifest from '",channel,"'.")
+        return null
+    }
+
+    manifest := Allocate(sizeof(Manifest))
+    Assert(manifest)
+
+    // parse function initializes manifest
+    res := ParseManifestText(session.get_file_data, manifest)
+    if !res {
+        // something is very wrong with the manifest
+        // message already printed
+        // leaking manifest allocation is fine.
+        return null
+    }
+
+    return manifest
 }
 
-fn DownloadGameVersion(version: char[]) {
+fn VerifyLocalFiles(channel: char[]) {
     res: i32;
     warnings := 0;
 
-    // TODO: Temporary
-    #macro INSTALLER_DIR "sandbox/installer"
-
     version_root: StringBuilder
     defer version_root.cleanup()
-    version_root.append(INSTALLER_DIR)
+    version_root.append(session.install_dir)
     version_root.append("/")
-    version_root.append(version)
+    version_root.append(channel)
     version_root.append("/")
 
-    log("Downloading manifest.txt")
+    log("Downloading ",channel,"/manifest.txt")
     signature_path: StringBuilder
     defer signature_path.cleanup()
     signature_path.append(version_root)
     signature_path.append("manifest.sig")
-    res = DownloadFile(version, "manifest.sig", signature_path)
+
+    manifest_path: StringBuilder
+    defer manifest_path.cleanup()
+    manifest_path.append(version_root)
+    manifest_path.append("manifest.txt")
+
+    verified := VerifySignature(signature_path, manifest_path)
+    if !verified {
+        log(LOG_YELLOW,"WARNING:",LOG_NO_COLOR," manifest.txt has been tampered with!\n  (or the server mixed up the manifests?)")
+        warnings++
+    }
+
+    manifest_text := ReadWholeFile(manifest_path)
+
+    manifest: Manifest* = Allocate(sizeof(Manifest))
+    Assert(manifest)
+    res = ParseManifestText(manifest_text, manifest)
+    if !res {
+        // error already printed
+        return;
+    }
+
+    path: StringBuilder
+    defer path.cleanup()
+
+    for mf : manifest.game_files {
+        path.clear()
+        path.append(version_root)
+        path.append(mf.file)
+
+        // TODO: What about large executables and dlls? Can we just read the whole file?
+        file_data := ReadWholeFile(path)
+        
+        diff := mf.compare_hash(file_data)
+        if diff {
+            warnings++;
+        }
+    }
+    
+    if warnings > 0 {
+        log(LOG_YELLOW,warnings," warning(s)",LOG_NO_COLOR)
+    } else {
+        log("Succesfully verified ", manifest.game_files.len, " files for ", channel)
+    }
+}
+
+fn DownloadGameVersion(channel: char[]) {
+    res: i32;
+    warnings := 0;
+
+    version_root: StringBuilder
+    defer version_root.cleanup()
+    version_root.append(session.install_dir)
+    version_root.append("/")
+    version_root.append(channel)
+    version_root.append("/")
+
+    log("Downloading ",channel,"/manifest.txt")
+    signature_path: StringBuilder
+    defer signature_path.cleanup()
+    signature_path.append(version_root)
+    signature_path.append("manifest.sig")
+    res = DownloadFile(channel, "manifest.sig", signature_path)
     if !res {
         return
     }
@@ -228,7 +387,7 @@ fn DownloadGameVersion(version: char[]) {
     defer manifest_path.cleanup()
     manifest_path.append(version_root)
     manifest_path.append("manifest.txt")
-    res = DownloadFile(version, "manifest.txt", manifest_path)
+    res = DownloadFile(channel, "manifest.txt", manifest_path)
     if !res {
         return
     }
@@ -243,50 +402,12 @@ fn DownloadGameVersion(version: char[]) {
 
     log("Downloading game files...")
 
-    // Replace carriage return
-    for @ptr c : session.get_file_data
-        if *c == '\r';
-            *c = ' '
-
-    struct ManifestFile {
-        fn cleanup() {
-            file.cleanup()
-            hash.cleanup()
-        }
-        file: StringBuilder;
-        hash: StringBuilder;
-    }
-    files: Array<ManifestFile>
-    defer files.cleanup()
-
-    lines := split("\n", session.get_file_data)
-    defer lines.cleanup()
-    for lines {
-        head := 0
-        parse_space(&head, *it)
-        path := parse_non_space(&head, *it)
-        parse_space(&head, *it)
-        hash := parse_non_space(&head, *it)
-
-        if hash.len == 0 // Skip empty lines (also skips lines with just a value or key, not a pair)
-            continue
-
-        if path == "version"
-            continue
-        if path == "date"
-            continue
-
-        // log(" ", nr, " ", path, " -> ", hash)
-
-        if hash.len != 64 {
-            log(LOG_RED, "ERROR:", LOG_NO_COLOR, " Hash length is ", hash.len," but should be 64 for SHA-256")
-            return
-        }
-
-        f: ManifestFile
-        f.file.append(path)
-        f.hash.append(hash)
-        files.add(f)
+    manifest: Manifest* = Allocate(sizeof(Manifest))
+    Assert(manifest)
+    res = ParseManifestText(session.get_file_data, manifest)
+    if !res {
+        // error already printed
+        return;
     }
     
     bad_file_count := 0
@@ -294,59 +415,24 @@ fn DownloadGameVersion(version: char[]) {
     path: StringBuilder
     defer path.cleanup()
 
-    
     temp_hash: u8[32]; // SHA-256 output is 32 bytes
-    for mf : files {
+    for mf : manifest.game_files {
         path.clear()
         path.append(version_root)
         path.append(mf.file)
         // log("Downloading ", mf.file)
-        res = DownloadFile(version, mf.file, path)
+        // TODO: What about large executables and dlls? Can we just download them and store data in session.get_file_data?
+        res = DownloadFile(channel, mf.file, path)
         if !res {
             bad_file_count++
             continue
         }
 
         file_data := session.get_file_data
-        
-        res = mbedtls_sha256(cast<void*>file_data.ptr, file_data.len, temp_hash.ptr, 0); // 0 = SHA-256 (224 otherwise?)
-        if res != 0 {
-            log("FAIL ",res," mbedtls_sha256 ", path)
-            continue
-        }
 
-        // @OPTIMIZE compare per 64-bit integer instead of per character
-        diff := false
-        for 0..32 {
-            a: i32 = mf.hash.ptr[2*nr]
-            b: i32 = mf.hash.ptr[2*nr+1]
-            if a >= cast<i32>'0' && a <= cast<i32>'9' {
-                a = a - '0'
-            } else if (a|32) >= cast<i32>'a' && (a|32) <= cast<i32>'f' {
-                a = (a|32) - 'a' + 10
-            } else {
-                log(LOG_YELLOW,"WARNING: ",LOG_NO_COLOR,"Hash for ",mf.file," contain non-hexidecimal characters!")
-                warnings++
-                return 
-            }
-            if b >= cast<i32>'0' && b <= cast<i32>'9' {
-                b = b - '0'
-            } else if (b|32) >= cast<i32>'a' && (b|32) <= cast<i32>'f' {
-                b = (b|32) - 'a' + 10
-            } else {
-                log(LOG_YELLOW,"WARNING: ",LOG_NO_COLOR,"Hash for ",mf.file," contain non-hexidecimal characters!")
-                warnings++
-                return 
-            }
-            if temp_hash[nr] != (a << 4) | (b) {
-                diff = true
-                break
-            }
-        }
-
+        diff := mf.compare_hash(file_data)
         if diff {
-            log(LOG_YELLOW, "WARNING: ",LOG_NO_COLOR, mf.file, " has been tampered with!\n  (or server sent the wrong file?)")
-            warnings++
+            warnings++;
         }
     }
     
@@ -357,7 +443,7 @@ fn DownloadGameVersion(version: char[]) {
     if warnings > 0 {
         log(LOG_YELLOW,warnings," warning(s)",LOG_NO_COLOR)
     } else {
-        log("Succesfully downloaded ", files.len, " files for ", version)
+        log("Succesfully downloaded ", manifest.game_files.len, " files for ", channel)
     }
 }
 
@@ -391,7 +477,7 @@ fn VerifySignature(signature_path: char[], manifest_path: char[]) -> bool {
         log("FAIL mbedtls_pk_parse_public_key ", res);
         return false;
     }
-    res = mbedtls_pk_verify(&ctx, MBEDTLS_MD_SHA256, hash.ptr, 32, signature_data.ptr, signature_data.len);
+    res = mbedtls_pk_verify(&ctx, MBEDTLS_MD_SHA256, hash.ptr, 32, cast<void*>signature_data.ptr, signature_data.len);
     if res == MBEDTLS_ERR_RSA_VERIFY_FAILED {
         // Verify failing is somewhat expected behaviour.
         // We don't print anything here.
@@ -421,6 +507,7 @@ fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
     session.net_lock.wait()
 
     if session.bad_file {
+        log(" server is missing ", file)
         session.bad_file = false
         return false
     }
@@ -455,8 +542,16 @@ fn handle_event(e: NetEvent*, user_data: void*) {
     stream.read<i32>(&head, cast<i32*>&kind)
 
     switch kind {
-        case MSG_RESPONSE_LATEST_VERSION:
-            stream.read_string8(&head, &session.last_version)
+        case MSG_RESPONSE_GET_CHANNELS:
+            num: i32;
+            stream.read<i32>(&head, &num)
+            session.channels.clear()
+            for 0..num {
+                name: StringBuilder
+                // builder is added to channels, we don't clean it up
+                stream.read_string8(&head, &name)
+                session.channels.add(name)
+            }
             session.net_lock.signal()
         case MSG_RESPONSE_GET_FILE:
             version, relative_file: StringBuilder
@@ -471,7 +566,6 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
             if file_size == 0 {
                 session.bad_file = true
-                log(" server is missing ", relative_file)
                 session.net_lock.signal()
                 return
             }

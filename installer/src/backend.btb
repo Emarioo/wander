@@ -84,11 +84,13 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
     // TODO: Check errors from read and writes
     switch kind {
-        case MSG_LATEST_VERSION:
+        case MSG_GET_CHANNELS:
             msg: ByteStream
             defer msg.cleanup()
-            msg.write<i32>(MSG_RESPONSE_LATEST_VERSION)
-            msg.write_string8("wander-0.1.0")
+            msg.write<i32>(MSG_RESPONSE_GET_CHANNELS)
+            msg.write<i32>(1)
+            msg.write_string8("release")
+
             data: u8[]
             msg.finalize(&data)
 

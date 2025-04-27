@@ -1,7 +1,162 @@
+#import "String"
+#import "Array"
+#import "libs/mbedtls-3.6.3/include/mbedtls.btb"
+
 enum MessageType {
     MSG_INVALID,
-    MSG_LATEST_VERSION,
-    MSG_RESPONSE_LATEST_VERSION,
+    MSG_GET_CHANNELS,
+    MSG_RESPONSE_GET_CHANNELS,
     MSG_GET_FILE,
     MSG_RESPONSE_GET_FILE,
+}
+
+struct Manifest_GameFile {
+    fn cleanup() {
+        file.cleanup()
+        hash.cleanup()
+    }
+    file: StringBuilder;
+    hash: StringBuilder;
+
+    // returns 0 if no difference, 1 if difference
+    fn compare_hash(data: char[]) -> i32 {
+        temp_hash: u8[32]; // SHA-256 output is 32 bytes
+
+        res := mbedtls_sha256(cast<void*>data.ptr, data.len, temp_hash.ptr, 0); // 0 = SHA-256 (224 otherwise?)
+        if res != 0 {
+            log("FAIL ",res," mbedtls_sha256 ", file)
+            return 1
+        }
+
+        // @OPTIMIZE compare per 64-bit integer instead of per character
+        diff := false
+        for 0..32 {
+            a: i32 = hash.ptr[2*nr]
+            b: i32 = hash.ptr[2*nr+1]
+            if a >= cast<i32>'0' && a <= cast<i32>'9' {
+                a = a - '0'
+            } else if (a|32) >= cast<i32>'a' && (a|32) <= cast<i32>'f' {
+                a = (a|32) - 'a' + 10
+            } else {
+                log(LOG_YELLOW,"WARNING: ",LOG_NO_COLOR,"Hash for ",file," contain non-hexidecimal characters!")
+                return 1
+            }
+            if b >= cast<i32>'0' && b <= cast<i32>'9' {
+                b = b - '0'
+            } else if (b|32) >= cast<i32>'a' && (b|32) <= cast<i32>'f' {
+                b = (b|32) - 'a' + 10
+            } else {
+                log(LOG_YELLOW,"WARNING: ",LOG_NO_COLOR,"Hash for ",file," contain non-hexidecimal characters!")
+                return 1
+            }
+            if temp_hash[nr] != (a << 4) | (b) {
+                diff = true
+                break
+            }
+        }
+
+        if diff {
+            log(LOG_YELLOW, "WARNING: ",LOG_NO_COLOR, file, " has been tampered with!\n  (or server sent the wrong file?)")
+            return 1
+        }
+        return 0
+    }
+}
+struct Manifest {
+    fn cleanup() {
+        manifest_version.cleanup()
+        game_version.cleanup()
+        data.cleanup()
+        commit.cleanup()
+        game_files.cleanup()
+    }
+
+    manifest_version: StringBuilder;
+    game_version: StringBuilder;
+    date: StringBuilder;
+    commit: StringBuilder;
+
+    game_files: Array<Manifest_GameFile>
+}
+fn std_print(obj: Manifest*) {
+    log("Manifest version: ", obj.manifest_version)
+    log("Game version: ", obj.manifest_version)
+    log("Date: ", obj.date)
+    log("Commit: ", obj.commit)
+    log("Game files:")
+    for obj.game_files {
+        log(" ", it.file, " ", file.hash)
+    }
+}
+
+fn ParseManifestText(text: char[], manifest: Manifest*) -> bool {
+    construct(manifest)
+
+    // carriage return begone
+    for @ptr c : text
+        if *c == '\r';
+            *c = ' '
+    
+    enum SectionType {
+        SECTION_UNKNOWN,
+        SECTION_METADATA,
+        SECTION_GAME_FILES,
+    }
+    section := SECTION_UNKNOWN
+
+    lines := split("\n", text)
+    defer lines.cleanup()
+    for lines {
+        head := 0
+        parse_space(&head, *it)
+        first := parse_non_space(&head, *it)
+        parse_space(&head, *it)
+        second := parse_non_space(&head, *it)
+
+        // Skip empty lines (also skips lines with just a value or key, not a pair)
+        if second.len == 0
+            continue
+
+        if first == "#" {
+            if second == "metadata" {
+                section = SECTION_METADATA
+            } else if second == "game_files" {
+                section = SECTION_GAME_FILES
+            }
+            continue
+        }
+
+        // log(" ", nr, " ", first, " -> ", second)
+
+        switch section {
+        case SECTION_METADATA:
+            if first == "manifest_version" {
+                manifest.manifest_version.clear()
+                manifest.manifest_version.append(second)
+            } else if first == "game_version" {
+                manifest.game_version.clear()
+                manifest.game_version.append(second)
+            } else if first == "date" {
+                manifest.date.clear()
+                manifest.date.append(second)
+            } else if first == "commit" {
+                manifest.commit.clear()
+                manifest.commit.append(second)
+            } else {
+                // unknown key
+            }
+        case SECTION_GAME_FILES:
+            if second.len != 64 {
+                log(LOG_RED, "ERROR:", LOG_NO_COLOR, " Hash length in manifest is ", second.len," but SHA-256 expects 64 (file entry in manifest: ",first,")")
+                return false
+            }
+
+            f: Manifest_GameFile
+            f.file.append(first)
+            f.hash.append(second)
+            manifest.game_files.add(f)
+        case:
+        }
+    }
+    return true
 }

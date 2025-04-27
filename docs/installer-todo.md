@@ -7,19 +7,3 @@
 - [ ] Reject to big files.
 - [ ] Flag to bypass and ignore manifest hash verification.
 
-
-## Flags
-
-```bash
-# install/update to latest release version
-installer
-
-# download files even if they have been tampered with
-installer --unsafe
-
-# install/update latest version and run the game
-installer --run
-
-# upload files to server (requires dev.token)
-installer --upload <version> <game_files_dir>
-```

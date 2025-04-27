@@ -55,7 +55,10 @@ def main():
 
         sign_manifest("bin/manifest.txt", "bin/manifest.sig")
 
-        temp_dir = "sandbox/server/wander-0.1.0"
+        channel = "release"
+
+        temp_dir = f"sandbox/server/{channel}"
+        os.makedirs(temp_dir, exist_ok=True)
         shutil.copy("bin/manifest.txt", f"{temp_dir}/manifest.txt")
         shutil.copy("bin/manifest.sig", f"{temp_dir}/manifest.sig")
         shutil.copy("bin/core.exe", f"{temp_dir}/core.exe")
@@ -93,10 +96,14 @@ def create_manifest(output_path):
 
         return f"{entry_path} {sha256.hexdigest()}\n"
 
+    game_version = "wander-0.3.1"
+
     now = datetime.datetime.now()
-    text += f"version dev_0.1.0\n"
-    text += f"date    {now.year}-{now.month:02}-{now.day:02}\n"
+    text += f"# metadata\n"
+    text += f"game_version {game_version}\n"
+    text += f"date         {now.year}-{now.month:02}-{now.day:02}\n"
     text += "\n"
+    text += f"# game_files\n"
 
     text += add_file("core.exe", "bin/core.exe")
     # text += add_file("game.dll", "bin/game.dll")
