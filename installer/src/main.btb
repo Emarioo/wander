@@ -12,9 +12,8 @@
 
 #import "./util.btb"
 
-#macro VERSION "0.0.1"
+#macro VERSION "0.1.0"
 #macro COMMIT_HASH ""
-#macro SERVER_PORT 9723
 
 fn print_version() {
     log("Wander Installer v",VERSION)
@@ -31,8 +30,8 @@ struct Session {
 
     channels: Array<StringBuilder>;
 
-    bad_file: bool;
-
+    response_result: ResponseResult;
+    server_message: StringBuilder;
 
     get_file_data: char[];
 
@@ -43,21 +42,6 @@ struct Session {
 global session: Session*;
 
 fn main(argc: i32, argv: char**) -> i32 {
-    /*
-        First user experience
-            - Download installer
-            - Run installer (no flags)
-                - It opens a terminal (for now)
-                - 
-    */
-    /*
-        Features
-            Download game
-                A game version has game files, manifest, signature.
-                An installed game has static game version and permanent data.
-                Permanent data is: user settings, world data
-    */
-
     disable_safety := false
     verify_files := false
     run_game := false
@@ -81,7 +65,6 @@ fn main(argc: i32, argv: char**) -> i32 {
     channel.append("release")
     
     upload := false;
-    upload_version: StringBuilder;
     upload_dir: StringBuilder;
 
     server_address: StringBuilder;
@@ -152,8 +135,8 @@ fn main(argc: i32, argv: char**) -> i32 {
                 log("Missing argument after ", arg)
                 return 1
             }
-            upload_version.clear()
-            upload_version.append(argv[argi])
+            channel.clear()
+            channel.append(argv[argi])
             argi++
             if argi >= argc {
                 log("Missing argument after ", arg)
@@ -214,7 +197,13 @@ fn main(argc: i32, argv: char**) -> i32 {
             log(" ", *it)
         }
     } else if upload {
-        log("TODO: upload")
+        yes := FileExist("dev.token")
+        if !yes {
+            log("You must be a developer to upload game files (file 'dev.token' is missing)")
+            return 1
+        }
+
+        UploadGameVersion(channel, upload_dir)
     } else {
         manifest := RetrieveManifest(channel)
         if !manifest {
@@ -241,7 +230,7 @@ fn main(argc: i32, argv: char**) -> i32 {
     if run_game {
         log("TODO: run game, --run")
     }
-    if unsafe {
+    if disable_safety {
         log("TODO: unsafe, --unsafe, what should it do? not download files?")
     }
 
@@ -249,11 +238,12 @@ fn main(argc: i32, argv: char**) -> i32 {
 }
 
 fn RetrieveChannels(channels: Array<StringBuilder>*) {
-    construct(channels)
+    msg_version := 1
 
     msg: ByteStream
     defer msg.cleanup()
-    msg.write<i32>(MSG_GET_CHANNELS)
+    msg.write(MSG_GET_CHANNELS)
+    msg.write<i32>(msg_version)
 
     data: u8[];
     msg.finalize(&data)
@@ -280,7 +270,7 @@ fn RetrieveManifest(channel: char[]) -> Manifest* {
 
     session.net_lock.wait()
 
-    if session.bad_file {
+    if session.response_result != RESPONSE_SUCCESS {
         log("Could not download manifest from '",channel,"'.")
         return null
     }
@@ -328,7 +318,12 @@ fn VerifyLocalFiles(channel: char[]) {
         warnings++
     }
 
-    manifest_text := ReadWholeFile(manifest_path)
+    manifest_text: char[]
+    manifest_text, res = ReadWholeFile(manifest_path)
+    if !res {
+        log("Could not read ",manifest_path)
+        return
+    }
 
     manifest: Manifest* = Allocate(sizeof(Manifest))
     Assert(manifest)
@@ -493,9 +488,12 @@ fn VerifySignature(signature_path: char[], manifest_path: char[]) -> bool {
 }
 
 fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
+    msg_version := 1
+
     msg: ByteStream
     defer msg.cleanup()
-    msg.write<i32>(MSG_GET_FILE)
+    msg.write(MSG_GET_FILE)
+    msg.write<i32>(msg_version)
     msg.write_string8(version)
     msg.write_string8(file)
 
@@ -506,9 +504,8 @@ fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
 
     session.net_lock.wait()
 
-    if session.bad_file {
+    if session.response_result != RESPONSE_SUCCESS {
         log(" server is missing ", file)
-        session.bad_file = false
         return false
     }
 
@@ -527,6 +524,108 @@ fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
     return true
 }
 
+fn UploadGameVersion(channel: char[], game_files_dir: char[]) {
+    res: i32
+    dev_token: char[]
+    dev_token, res = ReadWholeFile("dev.token")
+    if !res {
+        log("Could not read dev.token")
+        return
+    }
+
+    manifest_path: StringBuilder
+    manifest_path.append(game_files_dir)
+    manifest_path.append("/manifest.txt")
+    
+    signature_path: StringBuilder
+    signature_path.append(game_files_dir)
+    signature_path.append("/manifest.sig")
+
+    manifest_text: char[]
+    manifest_text, res = ReadWholeFile(manifest_path)
+    if !res {
+        log("Could not read ",manifest_path)
+        return
+    }
+    manifest: Manifest* = Allocate(sizeof(Manifest))
+    res = ParseManifestText(manifest_text, manifest)
+    if !res {
+        // error already printed
+        return
+    }
+
+    res = UploadFile(channel, dev_token, "manifest.txt", manifest_text)
+    if !res {
+        // error already printed
+        return
+    }
+
+    signature_text: char[]
+    signature_text, res = ReadWholeFile(signature_path)
+    if !res {
+        log("Could not read ",signature_path)
+        return
+    }
+    res = UploadFile(channel, dev_token, "manifest.sig", signature_text)
+    if !res {
+        // error already printed
+        return
+    }
+
+    temp_path: StringBuilder
+    defer temp_path.cleanup()
+    for mf : manifest.game_files {
+        temp_path.clear()
+        appends(temp_path, game_files_dir, "/", mf.file)
+        text: char[]
+        text, res = ReadWholeFile(temp_path)
+        if !res {
+            log("Could not read ",temp_path)
+            return
+        }
+        res = UploadFile(channel, dev_token, mf.file, text)
+        if !res {
+            // error already printed
+            return
+        }
+    }
+}
+fn UploadFile(channel: char[], dev_token: char[], file: char[], file_data: char[]) -> bool {
+    msg_version := 1
+
+    if file_data.len > 0x7FFF_FFFF {
+        log(LOG_RED, "ERROR: File ", file, " is ", file_data.len, " bytes which is to big for signed 32-bit integer.")
+        return false
+    }
+
+    // TODO: How much data can byte stream handle?
+    //   Is 2GB to much? Should we stream the file data?
+    msg: ByteStream
+    defer msg.cleanup()
+    msg.write(MSG_UPLOAD_FILE)
+    msg.write<i32>(msg_version)
+    msg.write_string8(dev_token)
+    msg.write_string8(channel)
+    msg.write_string8(file)
+    msg.write<i32>(file_data.len)
+    msg.write(file_data.ptr, file_data.len)
+
+    data: u8[];
+    msg.finalize(&data)
+
+    session.client.send(data)
+
+    session.net_lock.wait()
+
+    if session.response_result != RESPONSE_SUCCESS {
+        log("Upload of ", file, " failed. Error from server: ", &session.response_result)
+        log(" Server: ", session.server_message)
+        return false
+    }
+
+    return true
+}
+
 fn handle_event(e: NetEvent*, user_data: void*) {
     if e.type != EVENT_RECEIVE
         return;
@@ -539,19 +638,35 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
     head := 0
     kind: MessageType
-    stream.read<i32>(&head, cast<i32*>&kind)
+    msg_version: i32
+    stream.read(&head, &kind)
+    stream.read(&head, &msg_version)
+    stream.read(&head, &session.response_result)
+    stream.read_string8(&head, &session.server_message)
+
+    if msg_version != 1 {
+        log(LOG_RED,"ERROR: ",LOG_NO_COLOR,"Recieved ", &kind, " version ", msg_version, " which is unsupported. (is version corrupt or installer old?)" )
+        return
+    }
 
     switch kind {
         case MSG_RESPONSE_GET_CHANNELS:
+            session.channels.clear()
+
+            if session.response_result != RESPONSE_SUCCESS {
+                session.net_lock.signal()
+                return
+            }
+
             num: i32;
             stream.read<i32>(&head, &num)
-            session.channels.clear()
             for 0..num {
                 name: StringBuilder
                 // builder is added to channels, we don't clean it up
                 stream.read_string8(&head, &name)
                 session.channels.add(name)
             }
+
             session.net_lock.signal()
         case MSG_RESPONSE_GET_FILE:
             version, relative_file: StringBuilder
@@ -564,8 +679,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
             // log("File recieved: ", version, " ", relative_file, " size: ", file_size)
 
-            if file_size == 0 {
-                session.bad_file = true
+            if session.response_result != RESPONSE_SUCCESS {
                 session.net_lock.signal()
                 return
             }
@@ -578,6 +692,11 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             
             stream.read(&head, session.get_file_data.ptr, file_size)
 
+            session.net_lock.signal()
+         case MSG_RESPONSE_UPLOAD_FILE:
+            if session.response_result != RESPONSE_SUCCESS {
+                // we already know it's abad
+            }
             session.net_lock.signal()
         case: // dd nothing
     }

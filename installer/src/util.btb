@@ -2,12 +2,26 @@
 #import "Array"
 #import "libs/mbedtls-3.6.3/include/mbedtls.btb"
 
-enum MessageType {
+#macro SERVER_PORT 9723
+
+enum MessageType : i32 {
     MSG_INVALID,
     MSG_GET_CHANNELS,
     MSG_RESPONSE_GET_CHANNELS,
     MSG_GET_FILE,
     MSG_RESPONSE_GET_FILE,
+    MSG_UPLOAD_FILE,
+    MSG_RESPONSE_UPLOAD_FILE,
+}
+
+enum ResponseResult : i32 {
+    RESPONSE_SUCCESS,
+    
+    DOWNLOAD_FILE_MISSING,
+    
+    UPLOAD_AUTH_FAILED,
+    UPLOAD_CORRUPTED_MESSAGE,
+    UPLOAD_FILE_ERROR,
 }
 
 struct Manifest_GameFile {

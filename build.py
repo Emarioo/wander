@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import os, sys, hashlib, shutil, datetime
+import os, sys, hashlib, shutil, datetime, subprocess
 
 MODE_COMPILE_GAME = 1
 MODE_RUN_WEBSITE = 2
@@ -11,11 +11,12 @@ MODE_DISTRIBUTE = 5
 def main():
     version = ""
     mode = MODE_COMPILE_GAME
+    channel = "release"
     argi = 1
     while argi < len(sys.argv):
         arg = sys.argv[argi]
         argi += 1
-        if arg == "web":
+        if arg == "website":
             mode = MODE_RUN_WEBSITE
         elif arg == "installer":
             mode = MODE_COMPILE_INSTALLER
@@ -23,15 +24,12 @@ def main():
             mode = MODE_RUN_CONTENT_SERVER
         elif arg == "dist":
             mode = MODE_DISTRIBUTE
+            if argi < len(sys.argv) and not sys.argv[argi].startswith("-"):
+                channel = sys.argv[argi]
+                arg+=1
         else:
-            if mode == MODE_DISTRIBUTE:
-                if version is None:
-                    version = arg
-                else:
-                    print(f"Version already specified")    
-            else:
-                print(f"Unknown argument {arg}")
-                exit(1)
+            print(f"Unknown argument {arg}")
+            exit(1)
 
     if mode == MODE_COMPILE_GAME:
         compile_game()
@@ -45,32 +43,28 @@ def main():
         os.system("bin\\installer.exe")
     elif mode == MODE_RUN_CONTENT_SERVER:
         res = os.system("btb installer/src/backend.btb -o bin/server.exe")
-        if res == 0:
-            os.system("bin\\server.exe")
+        # if res == 0:
+        #     os.system("bin\\server.exe")
     elif mode == MODE_DISTRIBUTE:
         compile_installer()
         compile_game()
 
-        create_manifest("bin/manifest.txt")
-
+        version = fetch_game_version()
+        files = collect_game_files()
+        create_manifest(version, files, "bin/manifest.txt")
         sign_manifest("bin/manifest.txt", "bin/manifest.sig")
 
-        channel = "release"
+        dist_dir = f"bin/dist"
 
-        temp_dir = f"sandbox/server/{channel}"
-        os.makedirs(temp_dir, exist_ok=True)
-        shutil.copy("bin/manifest.txt", f"{temp_dir}/manifest.txt")
-        shutil.copy("bin/manifest.sig", f"{temp_dir}/manifest.sig")
-        shutil.copy("bin/core.exe", f"{temp_dir}/core.exe")
+        for dst,src in files:
+            full = f"{dist_dir}/{dst}"
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            shutil.copy(src, full)
 
-        for folder, _, files in os.walk("assets"):
-            for filename in files:
-                file_path = os.path.join(folder, filename)
-                dst = f"{temp_dir}/{file_path}"
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy(file_path, dst)
+        shutil.copy("bin/manifest.txt", f"{dist_dir}/manifest.txt")
+        shutil.copy("bin/manifest.sig", f"{dist_dir}/manifest.sig")
 
-        # os.system(f"bin\\installer.exe upload {version}")
+        os.system(f"bin\\installer.exe --upload {channel} {dist_dir}")
     else: 
         assert False
 
@@ -84,34 +78,65 @@ def compile_game():
     if res != 0:
         exit(1)
 
-def create_manifest(output_path):
-    text = ""
+def fetch_game_version():
+    with open("src/const.btb") as f:
+        text = f.read()
+        KEYWORD = "#macro VERSION"
+        at = text.find(KEYWORD)
+        head = at + len(KEYWORD)
+
+        while head < len(text):
+            c = text[head]
+            if c != " " and c != "\t":
+                break
+            head+=1
+
+        assert text[head] == "\""
+        end = text[head+1:].find("\"")
+
+        return text[head+1:end]
+
+    print("Failed fetching game version")
+    exit(1)
+
+def fetch_git_commit():
+    proc = subprocess.run(["git","rev-parse", "--short=10", "HEAD~1"], text=True, stdout=subprocess.PIPE)
+    if proc.returncode != 0:
+        exit(1)
+
+    print(f"[{proc.stdout}]")
+    return proc.stdout
+
+def collect_game_files():
+    game_files = []
+    game_files.append(("core.exe", "bin/core.exe"))
+    # game_files.append(("game.dll", "bin/game.dll"))
     
-    def add_file(entry_path, path):
-        entry_path = entry_path.replace("\\","/")
-        sha256 = hashlib.sha256()
-        with open(path, 'rb') as f:
-            while chunk := f.read(8192):
-                sha256.update(chunk)
+    for folder, _, files in os.walk("assets"):
+        for filename in files:
+            file_path = os.path.join(folder, filename)
+            game_files.append((file_path, file_path))
 
-        return f"{entry_path} {sha256.hexdigest()}\n"
+    return game_files
 
-    game_version = "wander-0.3.1"
-
+def create_manifest(game_version, game_files, output_path):
     now = datetime.datetime.now()
+
+    text = ""
     text += f"# metadata\n"
     text += f"game_version {game_version}\n"
     text += f"date         {now.year}-{now.month:02}-{now.day:02}\n"
     text += "\n"
     text += f"# game_files\n"
 
-    text += add_file("core.exe", "bin/core.exe")
-    # text += add_file("game.dll", "bin/game.dll")
+    for entry_path, src_path in game_files:
+        entry_path = entry_path.replace("\\","/")
+        sha256 = hashlib.sha256()
+        with open(src_path, 'rb') as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
 
-    for folder, _, files in os.walk("assets"):
-        for filename in files:
-            file_path = os.path.join(folder, filename)
-            text += add_file(file_path, file_path)
+        text += f"{entry_path} {sha256.hexdigest()}\n"
     
     with open(output_path, 'w', encoding='utf-8') as manifest:
         manifest.write(text)

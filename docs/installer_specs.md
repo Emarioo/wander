@@ -8,6 +8,19 @@ These are standardized channels that always exist.
 
 You can find more game versions using `installer --list-channels` where you will find `release-X.X.X`. These are specific game versions.
 
+# Limits
+
+|What|Limit|Note|
+|-|-|-|
+|Max concurrent connections|64|Excluding upload connections.|
+|Download from server|10 MB/s per IP address||
+|Upload to server|50 MB/s per IP address||
+|Max channels on server|10||
+|(derived) Max file storage usage|2 GB = 10 * (200 MB + 160 MB)|200 MB = worst case size for game files, 160 MB = worst case size for zipped game files|
+
+
+**NOTE:** My home network can only handle uploads of 10 Mb/s which is 1.25 MB/s.
+
 # Command line arguments
 Older versions of the installer doesn't support newer flags. These are the current ones (on this git commit).
 
@@ -105,7 +118,6 @@ core.exe 4814ab51dac
 assets/sprite.png f6a7b12d62c79
 ```
 
-
 # Network messages for the installer
 
 The data in the messages are read and written to by ByteStream (Stream.btb).
@@ -113,15 +125,27 @@ The data in the messages are read and written to by ByteStream (Stream.btb).
 - Strings are encoded with 1-byte length followed by that number of characters with a null terminator (not included in the length). An empty string takes up two bytes.
 - Everything is little endian. Big endian is standard for network messages but since these programs will always run on little endian machines it's would be unnecessary to convert integers to and from different endians.
 
+All response messages have: *message_type*, *msg_version*, *result*, and *server_message*.
+`ResponseResult` is defined in [](/installer/src/util.btb).
+
 ## MSG_GET_CHANNELS
 Ask server for channels.
 
 ```c
 struct Format_GET_CHANNELS {
     message_type: i32;
+    msg_version: i32;
+
+    // version 1
 }
+
 struct Format_RESPONSE_GET_CHANNELS {
     message_type: i32;
+    msg_version: i32;
+    result: ResponseResult;
+    server_message: string8;
+
+    // version 1
     channel_len: i32;
     channels: string8[channels_len];
 }
@@ -133,17 +157,48 @@ Ask server for game files. Installer will ask for signature and manifest first. 
 ```c
 struct Format_GET_FILE {
     message_type: i32;
+    msg_version: i32;
+
+    // version 1
     channel: string8;
     file: string8;
 }
-```
 
-```c
-struct Format_GET_FILE {
+struct Format_RESPONSE_GET_FILE {
     message_type: i32;
+    msg_version: i32;
+    result: ResponseResult;
+    server_message: string8;
+
+    // version 1
     channel: string8;
     file: string8;
     file_size: i32;
     data: u8[file_size];
+}
+```
+
+## MSG_UPLOAD_FILE
+
+```c
+struct Format_UPLOAD_FILE {
+    message_type: i32;
+    msg_version: i32;
+
+    // version 1
+    dev_token: string8;
+    channel: string8;
+    file: string8;
+    file_size: i32;
+    file_data: char[file_size];
+}
+
+struct Format_RESPONSE_UPLOAD_FILE {
+    message_type: i32;
+    msg_version: i32;
+    result: ResponseResult;
+    server_message: string8;
+
+    // version 1
 }
 ```

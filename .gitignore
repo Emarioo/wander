@@ -47,6 +47,7 @@ logs
 
 # Ignore experimentation folder
 sandbox
+*.code-workspace
 
 # Ignore temporary C/C++ files from root
 /*.cpp
