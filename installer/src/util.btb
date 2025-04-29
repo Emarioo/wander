@@ -22,6 +22,8 @@ enum ResponseResult : i32 {
     UPLOAD_AUTH_FAILED,
     UPLOAD_CORRUPTED_MESSAGE,
     UPLOAD_FILE_ERROR,
+
+    UNSUPPORTED_VERSION,
 }
 
 struct Manifest_GameFile {
@@ -106,11 +108,6 @@ fn std_print(obj: Manifest*) {
 fn ParseManifestText(text: char[], manifest: Manifest*) -> bool {
     construct(manifest)
 
-    // carriage return begone
-    for @ptr c : text
-        if *c == '\r';
-            *c = ' '
-    
     enum SectionType {
         SECTION_UNKNOWN,
         SECTION_METADATA,

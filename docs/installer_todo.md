@@ -1,5 +1,7 @@
 # Installer and backend server todos.
 
+- [ ] Net.btb assumes win_send writes all provided bytes. This is not the case. It may write less than requested bytes. HANDLE THIS, redesign the Socket.btb
+
 - [ ] If a developer uploads files to channel and a user tries to download it should wait downloading until upload is finished. User will receive a message "Developer is currently uploading game files to 'release', 35% done (53MB / 150MB)."
 - [ ] Is users are downloading from channel and developer starts to upload then user downloads should stop and restart giving them the "Developer is currently uploading..." message.
 
@@ -7,7 +9,8 @@
 - [ ] Authentication when uploading to server. A password token is required. Plain text is fine, we can add TLS and certificate later on the installer.
 - [ ] Upload limit per IP in case password token is compromised.
 - [ ] Sanitize messages. Discard abnormally large file requests, paths and so on.
-- [ ] Reject to big files.
+- [ ] Check validity of data from network. Reasonable length of string, reasonable file size (less than 2 GB)
+- [ ] Reject too big files.
 - [ ] Flag to bypass and ignore manifest hash verification.
 
 # Future todos

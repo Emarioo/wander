@@ -33,9 +33,50 @@ global session: Session*;
 fn main(argc: i32, argv: char**) -> i32 {
     print_version()
 
-    if argc == 2 {
-        test_token_bucket()
-        return 0
+    text_port: StringBuilder
+    text_port.append(SERVER_PORT)
+
+    argi := 1
+    while argi < argc {
+        arg := Slice<char>{argv[argi], strlen(argv[argi])}
+        argi++
+        if arg == "-v" || arg == "--version" {
+            print_version()
+            return 0
+        } else if arg == "-h" || arg == "--help" {
+            log("The Wander Content Server lets you host channels for installers to download game files from.")
+            log("")
+            log("Flags:")
+            log("  -v,--version   : Print version")
+            log("  --port <port>  : Change server port, default is ", SERVER_PORT)
+            return 0
+        } else if arg == "--port" {
+            if argi >= argc {
+                log("Missing port after ", arg)
+                return 1
+            }
+            text_port.clear()
+            text_port.append(argv[argi])
+            argi++
+        } else {
+            log("Unknown argument ", arg)
+            return 1
+        }
+    }
+
+    port: i32;
+    {
+        valid: bool
+        head: i32;
+        port = parse_i64(&head, text_port, &valid)
+        if !valid {
+            log(LOG_RED,"ERROR: '",text_port, "' is not a valid number.")
+            return 1
+        }
+        if port < 0 || port > 0xFFFF {
+            log(LOG_RED,"ERROR: Port ",text_port, " must be within 0 - 65535.")
+            return 1
+        }
     }
 
     session = Allocate(sizeof(Session))
@@ -46,14 +87,14 @@ fn main(argc: i32, argv: char**) -> i32 {
     // session.channels_dir.append("sandbox/server/channels")
 
     session.server.set_callback(handle_event, null)
-    res := session.server.start(SERVER_PORT, protocol = NET_TCP | NET_PROTO_MESSAGE)
+    res := session.server.start(port, protocol = NET_TCP | NET_PROTO_MESSAGE)
 
     if res != NET_SUCCESS {
-        log("Coulld not start server on port ", SERVER_PORT)
+        log("Could not start server on port ", port)
         return 1
     }
 
-    log("Started server on port ", SERVER_PORT)
+    log("Started server on port ", port)
 
     session.server.wait()
 
@@ -78,6 +119,21 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
     if msg_version != 1 {
         log(LOG_RED,"ERROR: Recieved ", &kind, " version ", msg_version, " which isn't supported.")
+        
+        msg_version := 1
+        msg: ByteStream
+        defer msg.cleanup()
+        msg.write(MSG_RESPONSE_GET_CHANNELS) // We default to this because 
+        msg.write(msg_version)
+        msg.write(UNSUPPORTED_VERSION)
+        mess: StringBuilder
+        appends(mess, "Version ",msg_version, " on ", &kind," is not supported. Server is running v", VERSION)
+        msg.write_string16(mess)
+
+        data: u8[]
+        msg.finalize(&data)
+
+        session.server.send(data, who = e.who)
         return
     }
 
@@ -90,11 +146,11 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             msg.write(MSG_RESPONSE_GET_CHANNELS)
             msg.write(msg_version)
             msg.write(RESPONSE_SUCCESS)
-            msg.write_string8("")
+            msg.write_string16("")
 
             // TODO: List channels
             msg.write<i32>(1)
-            msg.write_string8("release")
+            msg.write_string16("release")
 
             data: u8[]
             msg.finalize(&data)
@@ -105,8 +161,8 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             channel, relative_file: StringBuilder
             defer { channel.cleanup() relative_file.cleanup() }
 
-            stream.read_string8(&head, &channel)
-            stream.read_string8(&head, &relative_file)
+            stream.read_string16(&head, &channel)
+            stream.read_string16(&head, &relative_file)
             
             msg_version := 1
             msg: ByteStream
@@ -123,7 +179,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
                 log("Could not read ", path)
 
                 msg.write(DOWNLOAD_FILE_MISSING)
-                msg.write_string8("File does not exist")
+                msg.write_string16("File does not exist")
 
                 // Send back empty data, installer knows that this means failure
                 msg.write<i32>(0)
@@ -136,7 +192,10 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             log("File request: ", channel, " ", relative_file, " size: ", file_size)
 
             msg.write(RESPONSE_SUCCESS)
-            msg.write_string8("")
+            msg.write_string16("")
+
+            msg.write_string16(channel)
+            msg.write_string16(relative_file)
 
             valid_size := file_size < 0x7FFF_FFFF
             Assert(valid_size) // TODO: Crash in a good way
@@ -160,9 +219,9 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             defer { dev_token.cleanup() channel.cleanup() relative_file.cleanup() }
             file_size: i32
 
-            stream.read_string8(&head, &dev_token)
-            stream.read_string8(&head, &channel)
-            stream.read_string8(&head, &relative_file)
+            stream.read_string16(&head, &dev_token)
+            stream.read_string16(&head, &channel)
+            stream.read_string16(&head, &relative_file)
 
             stream.read(&head, &file_size)
             valid_size := file_size < 0x7FFF_FFFF
@@ -177,13 +236,18 @@ fn handle_event(e: NetEvent*, user_data: void*) {
 
             expected_dev_token: char[]
             if response_result == RESPONSE_SUCCESS {
-                expected_dev_token = ReadWholeFile("dev.token")
-                if expected_dev_token.len == 0 {
-                    log(LOG_RED,"ERROR: ",LOG_NO_COLOR, "Dev token is empty or doesn't exist.")
+                res: i32;
+                expected_dev_token, res = ReadWholeFile("dev.token")
+                if !res {
+                    log(LOG_RED,"ERROR: ",LOG_NO_COLOR, "Server does not have dev.token which is required for uploading.")
+                    log(" ours: ", expected_dev_token)
+                    log(" theirs: ", dev_token)
                     response_result = UPLOAD_AUTH_FAILED
                     server_message.append("Server is missing dev token. (server is messed up)")
                 } else if dev_token != expected_dev_token {
-                    log(LOG_RED,"WARNING: ",LOG_NO_COLOR,"Auth failed. Someone tried to upload ",channel,"@",relative_file, " with ",file_size, " bytes")
+                    log(LOG_YELLOW,"WARNING: ",LOG_NO_COLOR,"Auth failed. Someone tried to upload ",channel,"@",relative_file, " with ",file_size, " bytes")
+                    log(" ours: ", expected_dev_token)
+                    log(" theirs: ", dev_token)
                     response_result = UPLOAD_AUTH_FAILED
                     server_message.append("Authentication failed. 'dev.token' does not match the server's.")
                 }
@@ -217,7 +281,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
                     file_data.ptr += head
                     Assert(yes)
                     // TODO: Check file error
-                    FileWrite(file, file_data.ptr, file_data.len)
+                    FileWrite(file, file_data.ptr, file_data.len - head)
                 }
             }
 
@@ -231,7 +295,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             msg.write(MSG_RESPONSE_UPLOAD_FILE)
             msg.write(msg_version)
             msg.write(response_result)
-            msg.write_string8(server_message)
+            msg.write_string16(server_message)
 
             data: u8[]
             msg.finalize(&data)

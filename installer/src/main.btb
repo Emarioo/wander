@@ -42,10 +42,12 @@ struct Session {
 global session: Session*;
 
 fn main(argc: i32, argv: char**) -> i32 {
+
     disable_safety := false
     verify_files := false
     run_game := false
     list_channels := false
+    game_files_dir: StringBuilder
 
     install_dir: StringBuilder
     {
@@ -82,12 +84,13 @@ fn main(argc: i32, argv: char**) -> i32 {
             log("The Wander Installer lets you securely download new versions.")
             log("You can also download beta versions and auto-update them while playing the game (hotreloading).")
             log("")
-            log("If you want secure downloads you MUST ")
+            log("If you want secure downloads you MUST compare the SHA-256 of installer.exe with official one on github releases.")
+            log("(use 'installer.exe -v' to know which to compare with, they should be equal)")
             log("")
             log("Flags:")
             log("  -v,--version         : Print version")
             log("  --unsafe             : Ignore hash and signature checks (still warns)")
-            log("  --verify             : Verify game files against the manifest and signature (does not download anything)")
+            log("  --verify <path>      : Verify game files against the manifest and signature (does not download anything)")
             log("  --run                : Update and run game")
             log("  --list-channels      : List available game versions")
             log("  --channel <name>     : Download a beta version or older game versions")
@@ -100,7 +103,14 @@ fn main(argc: i32, argv: char**) -> i32 {
         } else if arg == "--unsafe" {
             disable_safety = true
         } else if arg == "--verify" {
+            if argi >= argc {
+                log("Missing argument after ", arg)
+                return 1
+            }
             verify_files = true
+            game_files_dir.clear()
+            game_files_dir.append(argv[argi])
+            argi++
         } else if arg == "--run" {
             run_game = true
         } else if arg == "--list-channels" {
@@ -180,15 +190,17 @@ fn main(argc: i32, argv: char**) -> i32 {
         }
     }
 
-    session.client.set_callback(handle_event, null)
-    res := session.client.start(server_address, port, protocol = NET_TCP | NET_PROTO_MESSAGE)
-    if res != NET_SUCCESS {
-        log(LOG_RED,"ERROR: ",LOG_NO_COLOR,"Could not connect to content server at ",server_address, ":",port)
-        return 1
+    if !verify_files {
+        session.client.set_callback(handle_event, null)
+        res := session.client.start(server_address, port, protocol = NET_TCP | NET_PROTO_MESSAGE)
+        if res != NET_SUCCESS {
+            log(LOG_RED,"ERROR: ",LOG_NO_COLOR,"Could not connect to content server at ",server_address, ":",port)
+            return 1
+        }
     }
 
     if verify_files {
-        VerifyLocalFiles(channel)
+        VerifyLocalFiles(game_files_dir)
     } else if list_channels {
         array: Array<StringBuilder>
         RetrieveChannels(&array);
@@ -205,6 +217,7 @@ fn main(argc: i32, argv: char**) -> i32 {
 
         UploadGameVersion(channel, upload_dir)
     } else {
+        
         manifest := RetrieveManifest(channel)
         if !manifest {
             if channel == "release" {
@@ -257,11 +270,13 @@ fn RetrieveChannels(channels: Array<StringBuilder>*) {
 }
 
 fn RetrieveManifest(channel: char[]) -> Manifest* {
+    msg_version := 1
     msg: ByteStream
     defer msg.cleanup()
     msg.write<i32>(MSG_GET_FILE)
-    msg.write_string8(channel)
-    msg.write_string8("manifest.txt")
+    msg.write(msg_version)
+    msg.write_string16(channel)
+    msg.write_string16("manifest.txt")
 
     data: u8[];
     msg.finalize(&data)
@@ -272,6 +287,7 @@ fn RetrieveManifest(channel: char[]) -> Manifest* {
 
     if session.response_result != RESPONSE_SUCCESS {
         log("Could not download manifest from '",channel,"'.")
+        log("Server: ", &session.response_result, ", ", session.server_message)
         return null
     }
 
@@ -290,18 +306,16 @@ fn RetrieveManifest(channel: char[]) -> Manifest* {
     return manifest
 }
 
-fn VerifyLocalFiles(channel: char[]) {
+fn VerifyLocalFiles(game_files_dir: char[]) {
     res: i32;
     warnings := 0;
 
     version_root: StringBuilder
     defer version_root.cleanup()
-    version_root.append(session.install_dir)
-    version_root.append("/")
-    version_root.append(channel)
+    version_root.append(game_files_dir)
     version_root.append("/")
 
-    log("Downloading ",channel,"/manifest.txt")
+    log("Verifying ",game_files_dir,"/manifest")
     signature_path: StringBuilder
     defer signature_path.cleanup()
     signature_path.append(version_root)
@@ -353,7 +367,7 @@ fn VerifyLocalFiles(channel: char[]) {
     if warnings > 0 {
         log(LOG_YELLOW,warnings," warning(s)",LOG_NO_COLOR)
     } else {
-        log("Succesfully verified ", manifest.game_files.len, " files for ", channel)
+        log("Succesfully verified ", manifest.game_files.len, " files in ", game_files_dir,"/manifest")
     }
 }
 
@@ -494,8 +508,8 @@ fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
     defer msg.cleanup()
     msg.write(MSG_GET_FILE)
     msg.write<i32>(msg_version)
-    msg.write_string8(version)
-    msg.write_string8(file)
+    msg.write_string16(version)
+    msg.write_string16(file)
 
     data: u8[];
     msg.finalize(&data)
@@ -506,6 +520,7 @@ fn DownloadFile(version: char[], file: char[], out_path: char[]) -> bool {
 
     if session.response_result != RESPONSE_SUCCESS {
         log(" server is missing ", file)
+        log("Server: ", &session.response_result, ", ", session.server_message)
         return false
     }
 
@@ -604,9 +619,9 @@ fn UploadFile(channel: char[], dev_token: char[], file: char[], file_data: char[
     defer msg.cleanup()
     msg.write(MSG_UPLOAD_FILE)
     msg.write<i32>(msg_version)
-    msg.write_string8(dev_token)
-    msg.write_string8(channel)
-    msg.write_string8(file)
+    msg.write_string16(dev_token)
+    msg.write_string16(channel)
+    msg.write_string16(file)
     msg.write<i32>(file_data.len)
     msg.write(file_data.ptr, file_data.len)
 
@@ -618,8 +633,8 @@ fn UploadFile(channel: char[], dev_token: char[], file: char[], file_data: char[
     session.net_lock.wait()
 
     if session.response_result != RESPONSE_SUCCESS {
-        log("Upload of ", file, " failed. Error from server: ", &session.response_result)
-        log(" Server: ", session.server_message)
+        log("Upload of ", file, " failed.")
+        log("Server: ", &session.response_result, ", ", session.server_message)
         return false
     }
 
@@ -642,7 +657,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
     stream.read(&head, &kind)
     stream.read(&head, &msg_version)
     stream.read(&head, &session.response_result)
-    stream.read_string8(&head, &session.server_message)
+    stream.read_string16(&head, &session.server_message)
 
     if msg_version != 1 {
         log(LOG_RED,"ERROR: ",LOG_NO_COLOR,"Recieved ", &kind, " version ", msg_version, " which is unsupported. (is version corrupt or installer old?)" )
@@ -663,7 +678,7 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             for 0..num {
                 name: StringBuilder
                 // builder is added to channels, we don't clean it up
-                stream.read_string8(&head, &name)
+                stream.read_string16(&head, &name)
                 session.channels.add(name)
             }
 
@@ -672,8 +687,8 @@ fn handle_event(e: NetEvent*, user_data: void*) {
             version, relative_file: StringBuilder
             defer { version.cleanup() relative_file.cleanup() }
 
-            stream.read_string8(&head, &version)
-            stream.read_string8(&head, &relative_file)
+            stream.read_string16(&head, &version)
+            stream.read_string16(&head, &relative_file)
             file_size: i32;
             stream.read(&head, &file_size)
 
@@ -684,7 +699,33 @@ fn handle_event(e: NetEvent*, user_data: void*) {
                 return
             }
 
+            // If we get corrupt data that has \r then printing that string will mess up the console (reset the line) so we replace those characters.
+            for version.sliced() {
+                if version.ptr[nr] == '\r'
+                    version.ptr[nr] = 'Z'
+                if version.ptr[nr] == '\n'
+                    version.ptr[nr] = 'z'
+            }
+            for relative_file.sliced() {
+                if relative_file.ptr[nr] == '\r'
+                    relative_file.ptr[nr] = 'Z'
+                if relative_file.ptr[nr] == '\n'
+                    relative_file.ptr[nr] = 'z'
+            }
+
+            if file_size > 100000000 {
+                log("Recieved ", relative_file, " with ", file_size," bytes. TO MUCH, skipping file.")
+                session.net_lock.signal()
+                return
+            }
+
+
+
             new_ptr := Reallocate(file_size, session.get_file_data.ptr, session.get_file_data.len)
+            if(!new_ptr) {
+                log("ad ",version," ", relative_file," " , file_size, " ", session.get_file_data.ptr," ", session.get_file_data.len)
+                FlushFileBuffers(GetStdHandle(STD_OUTPUT_HANDLE))
+            }
             Assert(new_ptr)
 
             session.get_file_data.ptr = new_ptr

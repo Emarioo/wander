@@ -37,3 +37,8 @@ If you want to modify the game and have the running game automatically update as
 ## Content Server (for installer)
 - Build with `build.py server`
 - Run with `bin\server.exe`
+
+# Testing
+Run all tests with `tests\run_tests.py`.
+
+Run specific tests with `tests\run_tests.py -f verify` (-f is short for --filter)

@@ -26,6 +26,7 @@ releases
 # exported functions from btb.exe when compiling library 
 *_decl.btb
 *_decl.h
+*__pycache__*
 
 # vscode extension package
 *.vsix
@@ -62,3 +63,10 @@ sandbox
 !*/test_private_key.pem
 */dev.token
 dev.token
+
+# Test system
+# tests create random game files in dist directories, we don't commit those
+tests/**/dist
+tests/**/server
+tests/**/channels
+tests/**/client
